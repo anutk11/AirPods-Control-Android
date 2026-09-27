@@ -2,6 +2,7 @@ package com.anutk11.airpodscontrol
 
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
+import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -95,22 +96,35 @@ class ClassicL2capTransport(
     }
 
     private fun createClassicSocket(device: BluetoothDevice, psm: Int): BluetoothSocket {
-        val clazz = BluetoothSocket::class.java
-        val constructor = clazz.declaredConstructors.firstOrNull { c ->
+        // Android has changed the private BluetoothSocket constructor signature
+        // across releases. LibrePods uses HiddenApiBypass for this exact reason.
+        // Do not hard-code a 7-argument signature.
+        val constructors = HiddenApiBypass.getDeclaredConstructors(BluetoothSocket::class.java)
+        log("BluetoothSocket constructors found: ${constructors.size}")
+
+        val constructor = constructors.firstOrNull { c ->
             val p = c.parameterTypes
-            p.size == 7 &&
+            p.size >= 6 &&
                 p[0] == Int::class.javaPrimitiveType &&
                 p[1] == Int::class.javaPrimitiveType &&
                 p[2] == Boolean::class.javaPrimitiveType &&
                 p[3] == Boolean::class.javaPrimitiveType &&
                 p[4] == BluetoothDevice::class.java &&
                 p[5] == Int::class.javaPrimitiveType
-        } ?: throw NoSuchMethodException("BluetoothSocket Classic L2CAP constructor not found")
+        } ?: throw NoSuchMethodException(
+            "No compatible BluetoothSocket constructor. Signatures: " +
+                constructors.joinToString(" | ") { it.parameterTypes.joinToString(",", "(", ")") }
+        )
 
-        constructor.isAccessible = true
-        return constructor.newInstance(3, -1, false, false, device, psm, null) as BluetoothSocket
+        val p = constructor.parameterTypes
+        val args = when (p.size) {
+            6 -> arrayOf<Any?>(3, -1, false, false, device, psm)
+            7 -> arrayOf<Any?>(3, -1, false, false, device, psm, null)
+            8 -> arrayOf<Any?>(3, -1, false, false, device, psm, null, null)
+            else -> throw NoSuchMethodException("Unsupported BluetoothSocket constructor size: ${p.size}")
+        }
+
+        log("Using BluetoothSocket constructor with ${p.size} parameters")
+        return HiddenApiBypass.newInstance(BluetoothSocket::class.java, p, *args) as BluetoothSocket
     }
 
-    private fun hex(data: ByteArray): String =
-        data.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
-}
