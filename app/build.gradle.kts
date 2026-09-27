@@ -14,9 +14,10 @@ android {
         versionCode = 2
         versionName = "0.2.0"
     }
-    dependencies {
-        implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
-    }
+}
+
+dependencies {
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 }
 
 kotlin {
