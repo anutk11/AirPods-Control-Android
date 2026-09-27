@@ -6,6 +6,7 @@ import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.SocketTimeoutException
 
 class ClassicL2capTransport(
     private val device: BluetoothDevice,
@@ -13,6 +14,8 @@ class ClassicL2capTransport(
 ) {
     companion object {
         private const val PSM = 0x1001
+        // Defensive per-read budget, including coalesced notifications; not a protocol frame size.
+        private const val MAX_RESPONSE_BYTES = 4096
         private val HANDSHAKE = byteArrayOf(
             0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
@@ -84,17 +87,31 @@ class ClassicL2capTransport(
     }
 
     private fun readAvailable(input: InputStream, timeoutMs: Long): ByteArray {
-        val end = System.currentTimeMillis() + timeoutMs
-        val result = ArrayList<Byte>()
+        val start = System.nanoTime()
+        val timeoutNanos = timeoutMs * 1_000_000
+        val result = ByteArray(MAX_RESPONSE_BYTES)
+        var size = 0
 
-        while (System.currentTimeMillis() < end) {
-            while (input.available() > 0) {
-                result.add(input.read().toByte())
+        while (true) {
+            val available = input.available()
+            if (System.nanoTime() - start >= timeoutNanos) {
+                if (size > 0 || available > 0) {
+                    throw SocketTimeoutException("AACP response exceeded read deadline")
+                }
+                return ByteArray(0)
             }
-            if (result.isNotEmpty()) break
-            Thread.sleep(20)
+            if (available > 0) {
+                if (size == result.size) {
+                    throw IOException("AACP response exceeds $MAX_RESPONSE_BYTES bytes")
+                }
+                val next = input.read()
+                if (next == -1) return result.copyOf(size)
+                result[size++] = next.toByte()
+            } else {
+                if (size > 0) return result.copyOf(size)
+                Thread.sleep(20)
+            }
         }
-        return result.toByteArray()
     }
 
     private fun hex(bytes: ByteArray): String {
